@@ -3,7 +3,19 @@ const { StringSession } = require('telegram/sessions')
 const input = require('input')
 const colors = require('colors')
 
+const {
+  days,
+  channelToSend,
+  apiId,
+  apiHash,
+  stringSessionSTR,
+  channels,
+  keywords,
+  keywords2,
+  banWords
+} = require('./const')
 
+const stringSession = new StringSession(stringSessionSTR)
 
 const appMain = async () => {
   // Ініціалізація клієнта
