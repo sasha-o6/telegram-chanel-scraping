@@ -22,7 +22,6 @@ const stringSession = new StringSession(stringSessionSTR)
 
 const appMain = async () => {
   // Ініціалізація клієнта
-
   const client = new TelegramClient(stringSession, apiId, apiHash, {
     connectionRetries: 5
   })
@@ -32,18 +31,10 @@ const appMain = async () => {
   } else {
     // Підключаємося та проходимо авторизацію
     await client.start({
-      phoneNumber: async () =>
-        // phoneNumberMe
-        // ? phoneNumberMe
-        // :
-        await input.text('Введіть ваш номер телефону: '),
+      phoneNumber: async () => await input.text('Введіть ваш номер телефону: '),
       password: async () =>
         await input.text('Введіть ваш пароль (якщо є 2FA): '),
-      phoneCode: async () =>
-        // phoneCodeMe
-        //   ? phoneCodeMe
-        //   :
-        await input.text('Введіть код із SMS/Telegram: '),
+      phoneCode: async () => await input.text('Введіть код із SMS/Telegram: '),
       onError: err => console.log(err)
     })
   }
@@ -54,10 +45,7 @@ const appMain = async () => {
   const now = new Date()
   const timeBoundary = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
 
-  const messagesMeChanel = await client.getMessages(channelToSend, {
-    limit
-  })
-
+  const messagesMeChanel = await client.getMessages(channelToSend, { limit })
   const messagesMeChanelPostLink = messagesMeChanel
     .map(item => {
       if (item?.message && item?.message.length > 0)
@@ -90,18 +78,14 @@ const appMain = async () => {
           `Не вдалося отримати повідомлення з каналу/чату: ${channel}`.red
         )
 
-      // Фільтруємо повідомлення за датою та ключовими словами
+      // Фільтруємо основні повідомлення за датою та ключовими словами
       const filteredMessages = resultTransform.filter(msg => {
-        // Перевіримо дату
         const msgDate = new Date(msg.date * 1000)
         if (msgDate < timeBoundary) {
           return false // Пропускаємо, якщо повідомлення давніше за нашу межу
         }
 
-        // Перевіримо текст на наявність ключових слів
         const text = msg.message?.toLowerCase() || ''
-
-        // Знайдемо, які саме слова з кожного списку є в повідомленні
         const foundKeywords = keywords.filter(kw =>
           text.includes(kw.toLowerCase())
         )
@@ -124,7 +108,7 @@ const appMain = async () => {
         }
       })
 
-      // Якщо є повідомлення, що підходять — пересилаємо їх у "Saved Messages"
+      // Якщо є основні повідомлення, що підходять — пересилаємо їх у "Saved Messages"
       for (const msg of filteredMessages) {
         if (
           !messagesMeChanelPostLink.includes(msg.postLink) &&
@@ -147,6 +131,69 @@ const appMain = async () => {
           })
 
         if (nodeEnv != 'prod') console.log('msg: ', msg)
+
+        // Перевірка thread повідомлень для кожного основного повідомлення
+        try {
+          // Якщо є thread для повідомлення, отримуємо повідомлення в темі
+          if (msg.id) {
+            const threadMessages = await client.getDiscussionMessage(
+              channel,
+              msg.id
+            )
+            console.log('threadMessages: ', threadMessages)
+
+            const filteredThreadMessages = threadMessages.filter(threadMsg => {
+              const text = threadMsg.message?.toLowerCase() || ''
+              const foundKeywords = keywords.filter(kw =>
+                text.includes(kw.toLowerCase())
+              )
+              const foundKeywords2 = keywords2.filter(kw =>
+                text.includes(kw.toLowerCase())
+              )
+              const foundBanWords = banWords.filter(kw =>
+                text.includes(kw.toLowerCase())
+              )
+
+              threadMsg.keyWords = [foundKeywords, foundKeywords2]
+
+              return (
+                keywords.some(kw => text.includes(kw.toLowerCase())) &&
+                keywords2.length > 0 &&
+                keywords2.some(kw => text.includes(kw.toLowerCase())) &&
+                !banWords.some(kw => text.includes(kw.toLowerCase()))
+              )
+            })
+
+            // Якщо є thread повідомлення, що підходять — пересилаємо їх
+            for (const threadMsg of filteredThreadMessages) {
+              if (
+                !messagesMeChanelPostLink.includes(threadMsg.postLink) &&
+                nodeEnv == 'prod'
+              )
+                await client.sendMessage(channelToSend, {
+                  message:
+                    `**Канал/чат:** ${msg.channelTitle ?? channel}\n` +
+                    `**Дата:** ${new Date(threadMsg.date * 1000).toLocaleString()}\n` +
+                    `**Thread повідомлення:**\n\n` +
+                    threadMsg.message +
+                    `\n\n\n` +
+                    `**Ключові слова:*** \n` +
+                    threadMsg.keyWords[0].join(', ') +
+                    '    ___    ' +
+                    threadMsg.keyWords[1].join(', ') +
+                    `\n` +
+                    `**Посилання:** \n` +
+                    threadMsg.postLink
+                })
+            }
+          }
+        } catch (err) {
+          console.error(
+            `Помилка обробки thread повідомлень для повідомлення: ${msg.id}`
+              .bold.red,
+            err
+          )
+        }
       }
     } catch (err) {
       console.error(`Помилка обробки:`.bold.red, err)
@@ -154,7 +201,6 @@ const appMain = async () => {
   }
 
   console.log('\nПеревірка завершена!'.bold.green)
-  // Можна викликати client.disconnect(), якщо більше нічого не робимо
   await client.disconnect()
 }
 
@@ -165,7 +211,6 @@ function getTextAfterLinkLabel(text, keyWord) {
   const parts = text.replaceAll('\n', '').split(keyWord)
   if (parts.length < 2) return ''
 
-  // Частина після "Посилання:" — це parts[1] (і все, що далі, якщо split має більше елементів)
   return parts.slice(1).join('').trim()
 }
 

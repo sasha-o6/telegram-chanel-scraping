@@ -1,0 +1,2 @@
+cd ~/Desktop/GitHub/telegram-scraping/
+node --env-file=.env app.js
