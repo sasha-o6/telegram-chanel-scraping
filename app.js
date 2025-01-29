@@ -170,3 +170,14 @@ function getTextAfterLinkLabel(text, keyWord) {
 }
 
 appMain()
+
+const minutes = 20
+
+// Запускаємо далі з періодом 20 хвилин (20 * 60 * 1000 мс)
+setInterval(
+  async () => {
+    console.log('\n\n--- Запускаємо наступну перевірку ---')
+    await appMain()
+  },
+  minutes * 60 * 1000
+)
