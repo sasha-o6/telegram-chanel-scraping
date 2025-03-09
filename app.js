@@ -1,8 +1,8 @@
+const { setTimeout: delay } = require('timers/promises')
 const { TelegramClient } = require('telegram')
 const { StringSession } = require('telegram/sessions')
 const input = require('input')
 const colors = require('colors')
-const fs = require('fs') // Додано модуль для роботи з файлами
 const {
   nodeEnv,
   days,
@@ -18,6 +18,16 @@ const {
   keywords2,
   banWords
 } = require('./const')
+const {
+  createChanelLinkId,
+  getTextAfterLinkLabel,
+  writeToFile,
+  getId,
+  createLink,
+  filterMessages,
+  getAllChanelMePostLinks,
+  guessChatType
+} = require('./utils')
 
 const stringSession = new StringSession(stringSessionSTR)
 
@@ -41,31 +51,14 @@ const appMain = async () => {
   console.log('Авторизація пройшла успішно!'.green.bold)
   console.log('Поточна сесія:', client.session.save())
 
-  const now = new Date()
-  const timeBoundary = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
-
-  const messagesMeChanel = await client.getMessages(channelToSend, { limit })
-
-  const messagesMeChanelPostLink = messagesMeChanel
-    .map(item => {
-      if (item?.message && item?.message.length > 0)
-        return getTextAfterLinkLabel(item.message, 'Посилання:')
-    })
-    .filter(item => item?.postLink != '')
+  const messagesMeChanelPostLink = await getAllChanelMePostLinks(client)
 
   for (const channel of channels) {
     try {
       console.log(`\n--- Перевіряємо канал/чат: ${channel} ---`)
 
       const result = await client.getMessages(channel, { limit })
-      console.log('result.isTopic: ', result.isTopic)
 
-      // Зберігаємо результат у файл result.json
-      fs.writeFileSync(
-        './result.json',
-        JSON.stringify(result, null, 2),
-        'utf-8'
-      )
       console.log('Результат збережено у файл result.json'.green.bold)
 
       const resultTransform = result
@@ -78,8 +71,9 @@ const appMain = async () => {
               date: obj.date,
               message: obgMessage,
               postLink: `https://t.me/${createChanelLinkId(channel)}/${obj.id}`,
-              channelTitle: obj?.action?.title ?? ''
-            }\
+              channelTitle: obj?.action?.title ?? '',
+              obj
+            }
         })
         .filter(obj => obj != undefined)
 
@@ -88,62 +82,105 @@ const appMain = async () => {
           `Не вдалося отримати повідомлення з каналу/чату: ${channel}`.red
         )
 
-      // Фільтруємо повідомлення за датою та ключовими словами
-      const filteredMessages = resultTransform.filter(msg => {
-        const msgDate = new Date(msg.date * 1000)
-        if (msgDate < timeBoundary) {
-          return false
-        }
-
-        const text = msg.message?.toLowerCase() || ''
-
-        const foundKeywords = keywords.filter(kw =>
-          text.includes(kw.toLowerCase())
-        )
-        const foundKeywords2 = keywords2.filter(kw =>
-          text.includes(kw.toLowerCase())
-        )
-        const foundBanWords = banWords.filter(kw =>
-          text.includes(kw.toLowerCase())
-        )
-
-        msg.keyWords = [foundKeywords, foundKeywords2]
-
-        if (
-          keywords.some(kw => text.includes(kw.toLowerCase())) &&
-          keywords2.length > 0 &&
-          keywords2.some(kw => text.includes(kw.toLowerCase())) &&
-          !banWords.some(kw => text.includes(kw.toLowerCase()))
-        ) {
-          return msg
-        }
-      })
-
       // Якщо є повідомлення, що підходять — пересилаємо їх у "Saved Messages"
-      for (const msg of filteredMessages) {
+      for (const msg of filterMessages(resultTransform)) {
         if (
           !messagesMeChanelPostLink.includes(msg.postLink) &&
           nodeEnv == 'prod'
         ) {
-          // await client.sendMessage(channelToSend, {
-          //   message:
-          //     `**Канал/чат:** ${msg.channelTitle ?? channel}\n` +
-          //     `**Дата:** ${new Date(msg.date * 1000).toLocaleString()}\n` +
-          //     `**Повідомлення:**\n\n` +
-          //     msg.message +
-          //     `\n\n\n` +
-          //     `**Ключові слова:*** \n` +
-          //     msg.keyWords[0].join(', ') +
-          //     '    ___    ' +
-          //     msg.keyWords[1].join(', ') +
-          //     `\n` +
-          //     `**Посилання:** \n` +
-          //     msg.postLink
-          // })
+          await client
+            .sendMessage(channelToSend, {
+              message:
+                `**Канал/чат:** ${msg.channelTitle ?? channel}\n` +
+                `**Дата:** ${new Date(msg.date * 1000).toLocaleString()}\n` +
+                `**Повідомлення:**\n\n` +
+                msg.message +
+                `\n\n\n` +
+                `**Ключові слова:*** \n` +
+                msg.keyWords[0].join(', ') +
+                '    ___    ' +
+                msg.keyWords[1].join(', ') +
+                `\n` +
+                `**Посилання:** \n` +
+                msg.postLink
+            })
+            .catch(
+              async err => {
+                if (err.errorMessage == 'FLOOD') {
+                  console.log(
+                    `Please weate ${err.seconds * 1000} secconds`.bold.yellow
+                  ) && (await delay(err.seconds * 1000))
+                }
+              }
+
+              // (await setTimeout(err.seconds * 1000, () => {
+              //   console.log(`Finnaly !`.bold.green)
+              // }))
+            )
         }
 
         if (nodeEnv != 'prod') {
           console.log('msg: ', msg)
+        }
+
+        if (
+          msg.obj?.replies?.replies > 0 &&
+          msg.obj?.replies?.comments == true
+        ) {
+          const repliesMessages = await client.getMessages(
+            getId(`https://t.me/c/${msg.obj.replies.channelId}`).chatId,
+            { limit }
+          )
+
+          await filterMessages(repliesMessages).forEach(async replie => {
+            const replieLink = createLink(
+              msg.obj.replies.channelId + '',
+              replie.id,
+              'channel'
+            ).tMeLink
+
+            if (
+              !messagesMeChanelPostLink.includes(replieLink.postLink) &&
+              nodeEnv == 'prod'
+            ) {
+              await client
+                .sendMessage(channelToSend, {
+                  message:
+                    `**Канал/чат:** ${msg.channelTitle ?? channel}\n` +
+                    `**Дата:** ${new Date(replie.date * 1000).toLocaleString()}\n` +
+                    `**Повідомлення:**\n\n` +
+                    replie.message +
+                    `\n\n\n` +
+                    `**Ключові слова:*** \n` +
+                    msg.keyWords[0].join(', ') +
+                    '    ___    ' +
+                    msg.keyWords[1].join(', ') +
+                    `\n` +
+                    `**Ключові слова коментаря:*** \n` +
+                    replie.keyWords[0].join(', ') +
+                    '    ___    ' +
+                    replie.keyWords[1].join(', ') +
+                    `\n` +
+                    `**Посилання на коментар:** \n` +
+                    +`\n` +
+                    `**Посилання:** \n` +
+                    msg.postLink
+                })
+                .catch(
+                  async err => {
+                    if (err.errorMessage == 'FLOOD') {
+                      console.log(
+                        `Please weate ${err.seconds * 1000} secconds`.bold
+                          .yellow
+                      ) && (await delay(err.seconds * 1000))
+                    }
+                  }
+                  // (await setTimeout(err.seconds * 1000, () => {
+                  //   console.log(`Finnaly !`.bold.green)
+                  // }))
+                )
+            }
+          })
         }
       }
     } catch (err) {
@@ -155,15 +192,9 @@ const appMain = async () => {
   await client.disconnect()
 }
 
-const createChanelLinkId = channel =>
-  (channel + '').replace('', '').replace('-100', 'c/')
-
-function getTextAfterLinkLabel(text, keyWord) {
-  const parts = text.replaceAll('\n', '').split(keyWord)
-  if (parts.length < 2) return ''
-
-  return parts.slice(1).join('').trim()
-}
+// function delay(ms) {
+//   return new Promise(resolve => setTimeout(resolve, ms))
+// }
 
 appMain()
 
