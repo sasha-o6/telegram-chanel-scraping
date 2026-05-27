@@ -5,7 +5,7 @@
     "colors": "^1.4.0",
     "input": "^1.0.1",
     "prettier": "^3.4.2",
-    "telegram": "^2.26.16"
+    "@mtcute/node": "^0.29.7"
   },
   "author": "",
   "license": "ISC"

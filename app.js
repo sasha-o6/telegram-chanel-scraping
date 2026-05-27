@@ -1,5 +1,4 @@
-const { TelegramClient } = require('telegram')
-const { StringSession } = require('telegram/sessions')
+const { TelegramClient, MemoryStorage } = require('@mtcute/node')
 const input = require('input')
 const colors = require('colors')
 const {
@@ -9,8 +8,6 @@ const {
   channelToSend,
   apiId,
   apiHash,
-  phoneNumberMe,
-  phoneCodeMe,
   stringSessionSTR,
   channels,
   keywords,
@@ -18,50 +15,49 @@ const {
   banWords
 } = require('./const')
 
-const stringSession = new StringSession(stringSessionSTR)
-
 const appMain = async () => {
   // Ініціалізація клієнта
-
-  const client = new TelegramClient(stringSession, apiId, apiHash, {
-    connectionRetries: 5
+  const tg = new TelegramClient({
+    apiId,
+    apiHash,
+    storage: new MemoryStorage()
   })
 
-  if (stringSession._key) {
-    await client.connect()
-  } else {
-    // Підключаємося та проходимо авторизацію
-    await client.start({
-      phoneNumber: async () =>
-        // phoneNumberMe
-        // ? phoneNumberMe
-        // :
-        await input.text('Введіть ваш номер телефону: '),
-      password: async () =>
-        await input.text('Введіть ваш пароль (якщо є 2FA): '),
-      phoneCode: async () =>
-        // phoneCodeMe
-        //   ? phoneCodeMe
-        //   :
-        await input.text('Введіть код із SMS/Telegram: '),
-      onError: err => console.log(err)
-    })
+  if (stringSessionSTR) {
+    await tg.importSession(stringSessionSTR)
   }
 
+  // Підключаємося та проходимо авторизацію
+  await tg.start({
+    phone: async () =>
+      // phoneNumberMe
+      // ? phoneNumberMe
+      // :
+      await input.text('Введіть ваш номер телефону: '),
+    password: async () =>
+      await input.text('Введіть ваш пароль (якщо є 2FA): '),
+    code: async () =>
+      // phoneCodeMe
+      //   ? phoneCodeMe
+      //   :
+      await input.text('Введіть код із SMS/Telegram: '),
+  })
+
   console.log('Авторизація пройшла успішно!'.green.bold)
-  console.log('Поточна сесія:', client.session.save())
+  console.log('Поточна сесія:', await tg.exportSession())
 
   const now = new Date()
-  const timeBoundary = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
+  const timeBoundary = new Date(now.getTime() - days * 24 * 60 * 60 * 1000); // 20 minutes
 
-  const messagesMeChanel = await client.getMessages(channelToSend, {
-    limit
-  })
+  const messagesMeChanel = []
+  for await (const msg of tg.iterHistory(channelToSend, { limit })) {
+    messagesMeChanel.push(msg)
+  }
 
   const messagesMeChanelPostLink = messagesMeChanel
     .map(item => {
-      if (item?.message && item?.message.length > 0)
-        return getTextAfterLinkLabel(item.message, 'Посилання:').trim()
+      if (item?.text && item?.text.length > 0)
+        return getTextAfterLinkLabel(item.text, 'Посилання:').trim()
     })
     .filter(item => item?.postLink != '')
 
@@ -69,23 +65,26 @@ const appMain = async () => {
     try {
       console.log(`\n--- Перевіряємо канал/чат: ${channel} ---`)
 
-      const result = await client.getMessages(channel, { limit })
+      const result = []
+      for await (const msg of tg.iterHistory(channel, { limit })) {
+        result.push(msg)
+      }
       const resultTransform = result
         .map(obj => {
-          const obgMessage = obj.message
+          const obgMessage = obj.text
 
           if (obgMessage != undefined && obgMessage != '')
             return {
               id: obj.id,
-              date: obj.date,
+              date: obj.date ? Math.floor(obj.date.getTime() / 1000) : 0,
               message: obgMessage,
               postLink: `https://t.me/${createChanelLinkId(channel)}/${obj.id}`,
-              channelTitle: obj?.action?.title ?? ''
+              channelTitle: obj?.chat?.title ?? ''
             }
         })
         .filter(obj => obj != undefined)
 
-      if (!result)
+      if (!result || result.length === 0)
         console.log(
           `Не вдалося отримати повідомлення з каналу/чату: ${channel}`.red
         )
@@ -136,8 +135,7 @@ const appMain = async () => {
           //   msg.postLink
           // )
 
-          await client.sendMessage(channelToSend, {
-            message:
+          await tg.sendText(channelToSend,
               `**Канал/чат:** ${msg.channelTitle ?? channel}\n` +
               `**Дата:** ${new Date(msg.date * 1000).toLocaleString()}\n` +
               `**Повідомлення:**\n\n` +
@@ -150,7 +148,7 @@ const appMain = async () => {
               `\n` +
               `**Посилання:** \n` +
               msg.postLink
-          })
+          )
         }
 
         if (nodeEnv != 'prod') console.log('msg: ', msg)
@@ -161,8 +159,8 @@ const appMain = async () => {
   }
 
   console.log('\nПеревірка завершена!'.bold.green)
-  // Можна викликати client.disconnect(), якщо більше нічого не робимо
-  await client.disconnect()
+  // Можна викликати tg.close(), якщо більше нічого не робимо
+  await tg.close()
 }
 
 const createChanelLinkId = channel =>
