@@ -2,33 +2,53 @@
 
 ## Призначення
 
-Цей проєкт є Node.js-скриптом для моніторингу Telegram-каналів і чатів. Він читає останні повідомлення з налаштованого списку джерел, фільтрує їх за датою, ключовими словами та бан-словами, після чого надсилає релевантні повідомлення в окремий Telegram-чат або канал.
+Проєкт є multi-user Telegram scraper. Він працює через Telegram bot, приймає персональні налаштування від кожного користувача, авторизує його Telegram user account, читає налаштовані групи, канали й чати, фільтрує повідомлення та доставляє релевантні пости у вибраний destination chat.
 
-Основний сценарій використання: пошук повідомлень про роботу, фриланс, веб-дизайн, сайти, презентації та суміжні запити в Telegram-спільнотах.
+Основний сценарій: автоматичний пошук потенційних замовлень, фриланс-запитів або інших релевантних повідомлень у Telegram-джерелах без ручного моніторингу кожного чату.
+
+## Поточна архітектура
+
+- `app.js` стартує застосунок, Telegram bot, PostgreSQL pool і global scheduler.
+- `src/bot/` обробляє Telegram Bot API polling, команди користувача, config CRUD і notification-повідомлення.
+- `src/auth/` веде покрокову авторизацію Telegram account через bot.
+- `src/configs/` працює з per-user scraper config і due-selection для scheduler.
+- `src/crypto/` шифрує чутливі дані через AES-256-GCM.
+- `src/db/` містить PostgreSQL pool і migration runner.
+- `src/scraper/` читає джерела, фільтрує повідомлення і ставить delivery у чергу.
+- `src/delivery/` відповідає за outbox, delivered-post history і захист від дублікатів.
+- `src/telegram/` містить adapter для Telegram account client.
+- `migrations/001_init.sql` створює таблиці й ключові constraints.
+- `test/` містить unit/regression тести для фільтрації, auth flow, SQL invariants, encryption і scheduler-adjacent логіки.
 
 ## Технології
 
-- Node.js
-- `telegram` / GramJS для роботи з Telegram API
-- `input` для інтерактивного введення телефону, пароля 2FA та коду підтвердження
-- `colors` для кольорового логування в консолі
-- `prettier` для форматування коду
+- Node.js CommonJS.
+- PostgreSQL через `pg`.
+- Telegram Bot API через lightweight polling client у `src/bot/botApi.js`.
+- GramJS (`telegram`) як default runtime adapter для реального `StringSession` flow.
+- `tdl` і `prebuilt-tdlib` підключені як TDLib adapter checkpoint; operational TDLib path потребує окремого wiring.
+- Docker Compose для локального запуску app + PostgreSQL.
+- `node --test` для тестів.
+- Prettier для форматування.
 
-## Структура проєкту
+## Конфігурація середовища
 
-```text
-.
-├── app.js              # Основний скрипт моніторингу Telegram
-├── const.js            # Конфігурація: API-ключі, сесія, канали, ключові слова
-├── package.json        # Залежності Node.js
-├── package-lock.json   # Зафіксовані версії залежностей
-├── telegram-scraping   # Команда/нотатка для ручного запуску
-├── .env                # Локальні змінні середовища, ігнорується Git
-├── .gitignore          # Ігнорує .env, const.js, node_modules
-└── .prettierrc         # Налаштування форматування
-```
+Приклад значень лежить у `.env.example`.
 
-## Встановлення
+| Змінна                              | Призначення                                                       |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `NODE_ENV`                          | Режим запуску, наприклад `development` або `test`.                |
+| `DATABASE_URL`                      | PostgreSQL connection string.                                     |
+| `BOT_TOKEN`                         | Token Telegram bot з BotFather.                                   |
+| `ENCRYPTION_KEY`                    | 32-byte key або base64-encoded 32 bytes для AES-256-GCM.          |
+| `GLOBAL_SCHEDULER_INTERVAL_MINUTES` | Global scheduler tick. За ТЗ використовується `20`.               |
+| `TELEGRAM_ADAPTER`                  | `gramjs`, `tdlib` або `fake`. Default: `gramjs`, у тестах `fake`. |
+| `TDLIB_DATABASE_DIRECTORY`          | TDLib database directory, якщо використовується `tdlib`.          |
+| `TDLIB_FILES_DIRECTORY`             | TDLib files directory, якщо використовується `tdlib`.             |
+
+Чутливі поля користувача (`apiId`, `apiHash`, `stringSessionSTR`) не мають зберігатися в plaintext. Вони шифруються перед записом у PostgreSQL.
+
+## Запуск локально
 
 1. Встановити залежності:
 
@@ -36,268 +56,164 @@
 npm install
 ```
 
-2. Переконатися, що є доступ до Telegram API:
+2. Підготувати `.env` на основі `.env.example`.
 
-- створити застосунок на `my.telegram.org`;
-- отримати `apiId` та `apiHash`;
-- мати Telegram-акаунт, який має доступ до каналів і чатів зі списку `channels`.
-
-## Запуск
-
-Поточна команда запуску, збережена у файлі `telegram-scraping`:
+3. Запустити PostgreSQL і застосунок через Docker Compose:
 
 ```bash
-node --env-file=.env app.js
+docker compose up --build
 ```
 
-Важливо: у поточній реалізації `app.js` читає налаштування напряму з `const.js`, а не з `process.env`. Тому `--env-file=.env` сам по собі не впливає на конфігурацію, якщо значення не підключені в коді через `process.env`.
-
-Також можна запустити напряму:
+4. Або запускати Node.js процес локально, якщо PostgreSQL уже доступний:
 
 ```bash
-node app.js
+npm run migrate
+npm start
 ```
 
-## Авторизація Telegram
+## Команди розробки
 
-Скрипт використовує `StringSession` з пакета `telegram/sessions`.
+```bash
+npm run migrate
+```
 
-Поведінка така:
+Застосовує SQL migrations із `migrations/`.
 
-1. Якщо в `stringSessionSTR` вже є збережена сесія, клієнт виконує `client.connect()`.
-2. Якщо сесія порожня, скрипт запускає інтерактивну авторизацію через `client.start()`.
-3. У консолі буде запитано:
-   - номер телефону;
-   - пароль 2FA, якщо він увімкнений;
-   - код із SMS або Telegram.
-4. Після успішної авторизації скрипт виводить у консоль актуальний рядок сесії:
+```bash
+npm test
+```
+
+Запускає тестовий набір через `node --test`.
+
+```bash
+npm run format:check
+npm run format
+```
+
+Перевіряє або застосовує Prettier. Якщо локальні OMX/state файли заважають повній перевірці, використовуйте scoped check для project files.
+
+## Telegram bot flow
+
+Користувач працює із застосунком через bot:
+
+- `/start` створює або оновлює профіль користувача і створює default config.
+- ` ` показує доступні команди.
+- `/get_config` показує поточний конфіг.
+- `/delete_config` видаляє конфіг поточного користувача.
+- `/set key value` змінює дозволене поле конфігу або секрет.
+- `/auth` запускає authorization flow у приватному чаті.
+
+Авторизація дозволена тільки в private chat. Bot послідовно збирає `apiId`, `apiHash`, phone number, verification code і 2FA password, якщо він потрібен. Verification code і 2FA password не зберігаються. Після успішної авторизації `stringSessionSTR` записується в БД у зашифрованому вигляді.
+
+## Дозволені поля конфігу
+
+Config CRUD обмежений такими полями:
+
+- `isEnable: boolean`
+- `days: number`
+- `limit: number`
+- `intervalMinutes: number`, мінімум `20`
+- `channelToSend: string`, наприклад `me`, chat id або bot chat
+- `channels: string[]`
+- `keywords: string[]`
+- `keywords2: string[]`
+- `banWords: string[]`
+
+`apiId` і `apiHash` приймаються через `/set`, але зберігаються в `telegram_secrets`, а не в `scraper_configs`.
+
+Приклади:
 
 ```text
-Поточна сесія: ...
+/set isEnable true
+/set intervalMinutes 60
+/set channelToSend me
+/set channels channel1,-1001234567890
+/set keywords робота,фриланс,сайт
+/set keywords2 дизайн,лендінг
+/set banWords вакансія,офіс
 ```
 
-Цей рядок можна зберегти в `stringSessionSTR`, щоб не проходити авторизацію повторно.
+## Scheduler
 
-## Конфігурація `const.js`
+Є один global scheduler. Він стартує одразу після запуску app і далі повторюється кожні `GLOBAL_SCHEDULER_INTERVAL_MINUTES`.
 
-Файл `const.js` експортує основні параметри роботи скрипта.
+На кожному tick scheduler:
 
-| Поле | Призначення |
-| --- | --- |
-| `nodeEnv` | Режим роботи. У `prod` скрипт надсилає знайдені повідомлення, в інших режимах переважно логує їх у консоль. |
-| `days` | За скільки останніх днів перевіряти повідомлення. |
-| `limit` | Скільки останніх повідомлень завантажувати з кожного каналу або чату. |
-| `channelToSend` | ID або username чату/каналу, куди надсилати знайдені повідомлення. |
-| `apiId` | Telegram API ID з `my.telegram.org`. |
-| `apiHash` | Telegram API Hash з `my.telegram.org`. |
-| `phoneNumberMe` | Номер телефону акаунта. У поточному коді автоматична підстановка закоментована. |
-| `phoneCodeMe` | Код підтвердження. У поточному коді автоматична підстановка закоментована. |
-| `stringSessionSTR` | Збережена Telegram-сесія. |
-| `channels` | Список каналів і чатів для моніторингу. Можна використовувати ID, `-100...` ID або username. |
-| `keywords` | Перша група ключових слів. Повідомлення має містити хоча б одне слово з цього списку. |
-| `keywords2` | Друга, обов'язкова група ключових слів. Повідомлення має містити хоча б одне слово з цього списку. |
-| `banWords` | Слова-винятки. Якщо повідомлення містить хоча б одне з них, воно не проходить фільтр. |
+1. Вибирає enabled configs, які due за `last_scraped_at` і `interval_minutes`.
+2. Лочить config через `locked_at`, щоб уникнути паралельного запуску.
+3. Виконує scraping для конкретного користувача.
+4. Записує `scrape_runs`.
+5. Оновлює `last_scraped_at` і знімає lock.
+6. Відправляє pending delivery outbox.
 
-## Логіка роботи
+Якщо global tick дорівнює 20 хв, а в користувача `intervalMinutes = 60`, його config буде пропущено на перших двох ticks і виконано на третьому.
 
-Основний процес описаний у `appMain()` у файлі `app.js`.
+## Scraper і фільтрація
 
-1. Створюється Telegram-клієнт:
+Scraper запускається тільки якщо є encrypted `apiId`, `apiHash`, `stringSessionSTR` і `session_status = active`.
 
-```js
-const client = new TelegramClient(stringSession, apiId, apiHash, {
-  connectionRetries: 5
-})
-```
+Для кожного джерела з `channels` він читає останні `limit` повідомлень, застосовує фільтр і ставить релевантні повідомлення в `delivery_outbox`.
 
-2. Скрипт авторизується або підключається через збережену сесію.
+Повідомлення проходить фільтр, якщо:
 
-3. Обчислюється дата, старіша за яку повідомлення не потрібні:
+1. Воно не старіше за `days`.
+2. Містить хоча б одне слово з `keywords`.
+3. Не містить слів із `banWords`.
+4. Якщо `keywords2` не порожній, містить хоча б одне слово з `keywords2`.
 
-```js
-const timeBoundary = new Date(now.getTime() - days * 24 * 60 * 60 * 1000)
-```
+Пошук виконується як case-insensitive substring match.
 
-4. З цільового каналу `channelToSend` завантажуються останні повідомлення. З них дістаються вже надіслані посилання після мітки `Посилання:`. Це використовується для перевірки дублікатів.
+## Доставка і дублікати
 
-5. Для кожного каналу зі списку `channels`:
+Доставка побудована через outbox:
 
-- завантажуються останні `limit` повідомлень;
-- кожне повідомлення приводиться до внутрішнього формату;
-- формується посилання на пост;
-- повідомлення фільтруються за датою;
-- текст перевіряється на `keywords`, `keywords2` і `banWords`;
-- знайдені ключові слова записуються в `msg.keyWords`.
+- `delivery_outbox` отримує pending повідомлення.
+- Unique constraint на `(user_id, config_id, source_id, message_id)` не дає поставити той самий пост повторно.
+- Після успішної відправки `markDeliverySent()` в одній PostgreSQL transaction створює запис у `delivered_posts` і позначає outbox row як `sent`.
+- Якщо Telegram send впав, `attempts` збільшується, а помилка зберігається в `last_error`.
 
-6. Якщо повідомлення пройшло фільтр і ще не було надіслане, у режимі `prod` воно відправляється в `channelToSend`.
+Система має at-least-once residual risk між зовнішнім Telegram send і PostgreSQL commit, бо ці операції не можуть бути атомарними між різними системами.
 
-7. У режимі, відмінному від `prod`, повідомлення виводиться в консоль:
+## Missing або expired session
 
-```js
-if (nodeEnv != 'prod') console.log('msg: ', msg)
-```
+Якщо session відсутня або неактивна:
 
-8. Після проходу по всіх каналах клієнт відключається.
+1. Scraper не запускає читання джерел.
+2. `session_status` оновлюється на `reauthorization_required`.
+3. Bot надсилає користувачу notification з проханням виконати `/auth`.
 
-## Формат надісланого повідомлення
+Якщо Telegram account client повертає session/auth помилку під час scraping, застосунок обробляє це як expired session і запускає той самий reauthorization path.
 
-У `prod` скрипт надсилає повідомлення приблизно такого змісту:
+## База даних
 
-```text
-Канал/чат: ...
-Дата: ...
-Повідомлення:
+Основні таблиці:
 
-...
+- `bot_users` - Telegram bot users.
+- `scraper_configs` - один config на користувача.
+- `telegram_secrets` - encrypted `apiId`, `apiHash`, `stringSessionSTR`, session status.
+- `auth_flows` - активний authorization state.
+- `delivery_outbox` - черга повідомлень на доставку.
+- `delivered_posts` - історія доставлених постів.
+- `scrape_runs` - журнал запусків scraper.
+- `schema_migrations` - застосовані migrations.
 
-Ключові слова:
-...
+Критичні invariants задаються в SQL: one config per user, one secrets row per user, one active auth flow per user, outbox/delivered uniqueness.
 
-Посилання:
-https://t.me/...
-```
+## Відомі обмеження
 
-## Періодичний запуск
+- Default реальний adapter - GramJS, бо ТЗ вимагає `stringSessionSTR`. TDLib dependency підключена й імпорт перевірений, але TDLib operational methods залишені як явний adapter checkpoint.
+- Bot API polling простий і process-local; для production scaling потрібен webhook або distributed polling lock.
+- Outbox дає захист від повторної постановки в чергу, але не може зробити Telegram send і DB commit повністю атомарними.
+- Повноцінний SaaS admin, billing і джерела поза Telegram не входять у v1.
 
-Після першого запуску `appMain()` скрипт створює інтервал:
+## Перевірений стан
 
-```js
-const minutes = 20
+Остання локальна перевірка після rewrite:
 
-setInterval(async () => {
-  console.log('\n\n--- Запускаємо наступну перевірку ---')
-  await appMain()
-}, minutes * 60 * 1000)
-```
+- `npm test` - 21/21 passing.
+- Scoped `prettier --check` для project files - passing.
+- `node --check` для `app.js`, `src/**`, `test/**` - passing.
+- `docker compose config` - valid.
+- Smoke import для `tdl`, `prebuilt-tdlib` і `telegram` - passing.
 
-Тобто перевірка повторюється кожні 20 хвилин, доки процес Node.js працює.
-
-## Режими роботи
-
-### `nodeEnv: 'dev'`
-
-- повідомлення не надсилаються в цільовий канал;
-- знайдені повідомлення виводяться в консоль;
-- зручно для перевірки списків каналів і ключових слів.
-
-### `nodeEnv: 'prod'`
-
-- скрипт перевіряє дублікати за посиланням на пост;
-- нові релевантні повідомлення надсилаються в `channelToSend`;
-- варто використовувати тільки після перевірки конфігурації в `dev`.
-
-## Правила фільтрації
-
-Повідомлення проходить фільтр, якщо виконуються всі умови:
-
-1. Повідомлення не старіше за `days`.
-2. Текст містить хоча б одне слово з `keywords`.
-3. `keywords2` не порожній.
-4. Текст містить хоча б одне слово з `keywords2`.
-5. Текст не містить жодного слова з `banWords`.
-
-Порівняння виконується через `text.includes(...)` у нижньому регістрі, тобто це простий пошук підрядка, а не пошук цілих слів.
-
-## Формування посилання на пост
-
-Функція `createChanelLinkId(channel)` перетворює Telegram ID у формат для URL:
-
-```js
-const createChanelLinkId = channel =>
-  (channel + '').replace('', '').replace('-100', 'c/')
-```
-
-Для приватних супергруп із ID `-100...` посилання формується як:
-
-```text
-https://t.me/c/<id-без--100>/<message_id>
-```
-
-Для username-каналів формується:
-
-```text
-https://t.me/<username>/<message_id>
-```
-
-## Перевірка дублікатів
-
-Перед обробкою джерел скрипт читає останні повідомлення з `channelToSend`, дістає з них текст після `Посилання:` і зберігає список уже надісланих посилань.
-
-Якщо нове повідомлення має `postLink`, який уже є в цьому списку, у режимі `prod` воно не надсилається повторно.
-
-## Безпека
-
-У поточному стані `const.js` містить чутливі дані:
-
-- `apiId`;
-- `apiHash`;
-- номер телефону;
-- `stringSessionSTR`;
-- ID приватних каналів або чатів.
-
-Файл `const.js` доданий у `.gitignore`, що правильно для локальної розробки. Проте безпечніша архітектура така:
-
-- тримати секрети в `.env`;
-- читати їх через `process.env`;
-- залишити в репозиторії тільки приклад `const.example.js` або `.env.example`;
-- не комітити реальний `stringSessionSTR`;
-- перегенерувати Telegram-сесію, якщо вона випадково потрапила в Git або була показана стороннім.
-
-## Потенційні проблеми та місця для покращення
-
-1. `--env-file=.env` зараз майже не використовується, бо конфігурація імпортується з `const.js`.
-2. `phoneNumberMe` і `phoneCodeMe` оголошені, але їх автоматичне використання закоментоване.
-3. У `messagesMeChanelPostLink` є фільтр `.filter(item => item?.postLink != '')`, але `item` після `map` є рядком або `undefined`, тому `item?.postLink` завжди не те поле, яке очікується. Надійніше фільтрувати так: `.filter(Boolean)`.
-4. `createChanelLinkId()` містить `.replace('', '')`, який нічого корисного не змінює.
-5. У `filteredMessages.filter(...)` callback повертає `msg`, хоча для `filter` достатньо повертати `true`.
-6. Якщо `keywords2` порожній, жодне повідомлення не пройде фільтр. Це відповідає поточному коду, але може бути неочікуваним при зміні конфігурації.
-7. Якщо канал недоступний або акаунт не має прав читання, помилка буде залогована, а скрипт перейде до наступного каналу.
-8. У `channelTitle` використовується `obj?.action?.title`, але для звичайних повідомлень назва каналу зазвичай там відсутня. У повідомленні може бути показаний fallback на `channel`.
-
-## Рекомендований процес розробки
-
-1. Тримати `nodeEnv: 'dev'`.
-2. Запустити:
-
-```bash
-node app.js
-```
-
-3. Перевірити в консолі, які повідомлення знаходить фільтр.
-4. Відкоригувати `channels`, `keywords`, `keywords2` або `banWords`.
-5. Переконатися, що `channelToSend` правильний.
-6. Переключити `nodeEnv` на `prod`.
-7. Запустити скрипт у довгоживучому процесі, наприклад через `pm2`, `systemd`, Docker або інший process manager.
-
-## Приклад запуску через `pm2`
-
-```bash
-npm install -g pm2
-pm2 start app.js --name telegram-chanel-scraping
-pm2 logs telegram-chanel-scraping
-pm2 save
-```
-
-## Форматування
-
-У проєкті є `.prettierrc` з такими основними правилами:
-
-- без крапок з комою;
-- одинарні лапки;
-- відступ 2 пробіли;
-- без trailing commas.
-
-Форматування можна запускати через `npx prettier`, наприклад:
-
-```bash
-npx prettier --write app.js const.js
-```
-
-## Коротка пам'ятка
-
-- `app.js` містить логіку запуску, авторизації, фільтрації та надсилання.
-- `const.js` містить всю конфігурацію та секрети.
-- `nodeEnv: 'dev'` безпечний для тестів, бо не надсилає повідомлення.
-- `nodeEnv: 'prod'` реально надсилає знайдені повідомлення.
-- Скрипт повторює перевірку кожні 20 хвилин.
-- Для стабільної роботи акаунт Telegram має мати доступ до всіх каналів і чатів зі списку.
+`docker compose up -d postgres` не був підтверджений у поточному середовищі, бо Docker daemon недоступний на машині.

@@ -1,11 +1,23 @@
 {
-  "name": "telegram-chanel-scraping",
+  "name": "telegram-channel-scraper",
+  "version": "1.0.0",
+  "description": "Multi-user Telegram scraper with bot-managed configuration",
   "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test",
+    "format:check": "prettier . --check",
+    "format": "prettier . --write"
+  },
   "dependencies": {
-    "colors": "^1.4.0",
-    "input": "^1.0.1",
-    "prettier": "^3.4.2",
-    "telegram": "^2.26.16"
+    "pg": "^8.13.1",
+    "prebuilt-tdlib": "^0.1008040.0",
+    "telegram": "^2.26.22",
+    "tdl": "^8.1.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2"
   },
   "author": "",
   "license": "ISC"
